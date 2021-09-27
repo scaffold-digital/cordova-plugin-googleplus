@@ -70,6 +70,12 @@ public class GooglePlus extends CordovaPlugin implements GoogleApiClient.OnConne
     private GoogleApiClient mGoogleApiClient;
     private CallbackContext savedCallbackContext;
 
+    private CallbackContext savedCallbackContext_Login;
+    private CallbackContext savedCallbackContext_SilentLogin;
+    private CallbackContext savedCallbackContext_Logout;
+    private CallbackContext savedCallbackContext_Disconnect;
+    private CallbackContext savedCallbackContext_GetSigningCertificateFingerprint;
+
     @Override
     public void initialize(CordovaInterface cordova, CordovaWebView webView) {
         super.initialize(cordova, webView);
@@ -84,6 +90,7 @@ public class GooglePlus extends CordovaPlugin implements GoogleApiClient.OnConne
             savedCallbackContext.success("" + avail);
 
         } else if (ACTION_LOGIN.equals(action)) {
+            this.savedCallbackContext_Login = callbackContext;
             //pass args into api client build
             buildGoogleApiClient(args.optJSONObject(0));
 
@@ -93,6 +100,7 @@ public class GooglePlus extends CordovaPlugin implements GoogleApiClient.OnConne
             signIn();
 
         } else if (ACTION_TRY_SILENT_LOGIN.equals(action)) {
+            this.savedCallbackContext_SilentLogin = callbackContext;
             //pass args into api client build
             buildGoogleApiClient(args.optJSONObject(0));
 
@@ -100,14 +108,17 @@ public class GooglePlus extends CordovaPlugin implements GoogleApiClient.OnConne
             trySilentLogin();
 
         } else if (ACTION_LOGOUT.equals(action)) {
+            this.savedCallbackContext_Logout = callbackContext;
             Log.i(TAG, "Trying to logout!");
             signOut();
 
         } else if (ACTION_DISCONNECT.equals(action)) {
+            this.savedCallbackContext_Disconnect = callbackContext;
             Log.i(TAG, "Trying to disconnect the user");
             disconnect();
 
         } else if (ACTION_GET_SIGNING_CERTIFICATE_FINGERPRINT.equals(action)) {
+            this.savedCallbackContext_GetSigningCertificateFingerprint = callbackContext;
             getSigningCertificateFingerprint();
 
         } else {
@@ -204,7 +215,7 @@ public class GooglePlus extends CordovaPlugin implements GoogleApiClient.OnConne
         ConnectionResult apiConnect =  mGoogleApiClient.blockingConnect();
 
         if (apiConnect.isSuccess()) {
-            handleSignInResult(Auth.GoogleSignInApi.silentSignIn(this.mGoogleApiClient).await());
+            handleSilentSignInResult(Auth.GoogleSignInApi.silentSignIn(this.mGoogleApiClient).await());
         }
     }
 
@@ -226,9 +237,9 @@ public class GooglePlus extends CordovaPlugin implements GoogleApiClient.OnConne
                         public void onResult(Status status) {
                             //on success, tell cordova
                             if (status.isSuccess()) {
-                                savedCallbackContext.success("Logged user out");
+                                savedCallbackContext_Logout.success("Logged user out");
                             } else {
-                                savedCallbackContext.error(status.getStatusCode());
+                                savedCallbackContext_Logout.error(status.getStatusCode());
                             }
                         }
                     }
@@ -253,9 +264,9 @@ public class GooglePlus extends CordovaPlugin implements GoogleApiClient.OnConne
                         @Override
                         public void onResult(Status status) {
                             if (status.isSuccess()) {
-                                savedCallbackContext.success("Disconnected user");
+                                savedCallbackContext_Disconnect.success("Disconnected user");
                             } else {
-                                savedCallbackContext.error(status.getStatusCode());
+                                savedCallbackContext_Disconnect.error(status.getStatusCode());
                             }
                         }
                     }
@@ -356,9 +367,75 @@ public class GooglePlus extends CordovaPlugin implements GoogleApiClient.OnConne
                         result.put("familyName", acct.getFamilyName());
                         result.put("givenName", acct.getGivenName());
                         result.put("imageUrl", acct.getPhotoUrl());
-                        savedCallbackContext.success(result);
+                        savedCallbackContext_Login.success(result);
                     } catch (Exception e) {
-                        savedCallbackContext.error("Trouble obtaining result, error: " + e.getMessage());
+                        savedCallbackContext_Login.error("Trouble obtaining result, error: " + e.getMessage());
+                    }
+                    return null;
+                }
+            }.execute();
+        }
+    }
+
+    /**
+     * Function for handling the sign in result
+     * Handles the result of the authentication workflow.
+     *
+     * If the sign in was successful, we build and return an object containing the users email, id, displayname,
+     * id token, and (optionally) the server authcode.
+     *
+     * If sign in was not successful, for some reason, we return the status code to web app to be handled.
+     * Some important Status Codes:
+     *      SIGN_IN_CANCELLED = 12501 -> cancelled by the user, flow exited, oauth consent denied
+     *      SIGN_IN_FAILED = 12500 -> sign in attempt didn't succeed with the current account
+     *      SIGN_IN_REQUIRED = 4 -> Sign in is needed to access API but the user is not signed in
+     *      INTERNAL_ERROR = 8
+     *      NETWORK_ERROR = 7
+     *
+     * @param signInResult - the GoogleSignInResult object retrieved in the onActivityResult method.
+     */
+    private void handleSilentSignInResult(final GoogleSignInResult signInResult) {
+        if (this.mGoogleApiClient == null) {
+            savedCallbackContext.error("GoogleApiClient was never initialized");
+            return;
+        }
+
+        if (signInResult == null) {
+            savedCallbackContext.error("SignInResult is null");
+            return;
+        }
+
+        Log.i(TAG, "Handling SignIn Result");
+
+        if (!signInResult.isSuccess()) {
+            Log.i(TAG, "Wasn't signed in");
+
+            //Return the status code to be handled client side
+            savedCallbackContext.error(signInResult.getStatus().getStatusCode());
+        } else {
+            new AsyncTask<Void, Void, Void>() {
+                @Override
+                protected Void doInBackground(Void... params) {
+                    GoogleSignInAccount acct = signInResult.getSignInAccount();
+                    JSONObject result = new JSONObject();
+                    try {
+                        JSONObject accessTokenBundle = getAuthToken(
+                                cordova.getActivity(), acct.getAccount(), true
+                        );
+                        result.put(FIELD_ACCESS_TOKEN, accessTokenBundle.get(FIELD_ACCESS_TOKEN));
+                        result.put(FIELD_TOKEN_EXPIRES, accessTokenBundle.get(FIELD_TOKEN_EXPIRES));
+                        result.put(FIELD_TOKEN_EXPIRES_IN, accessTokenBundle.get(FIELD_TOKEN_EXPIRES_IN));
+                        result.put("email", acct.getEmail());
+                        result.put("idToken", acct.getIdToken());
+                        result.put("serverAuthCode", acct.getServerAuthCode());
+                        result.put("userId", acct.getId());
+                        result.put("displayName", acct.getDisplayName());
+                        result.put("familyName", acct.getFamilyName());
+                        result.put("givenName", acct.getGivenName());
+                        result.put("imageUrl", acct.getPhotoUrl());
+                        savedCallbackContext_SilentLogin.success(result);
+                    } catch (Exception e) {
+                        savedCallbackContext_SilentLogin.error("Trouble obtaining result, error: " + e.getMessage());
                     }
                     return null;
                 }
@@ -390,11 +467,11 @@ public class GooglePlus extends CordovaPlugin implements GoogleApiClient.OnConne
             // strip the last ':'
             strResult = strResult.substring(0, strResult.length()-1);
             strResult = strResult.toUpperCase();
-            this.savedCallbackContext.success(strResult);
+            this.savedCallbackContext_GetSigningCertificateFingerprint.success(strResult);
 
         } catch (Exception e) {
             e.printStackTrace();
-            savedCallbackContext.error(e.getMessage());
+            savedCallbackContext_GetSigningCertificateFingerprint.error(e.getMessage());
         }
     }
 
