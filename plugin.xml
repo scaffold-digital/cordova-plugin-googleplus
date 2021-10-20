@@ -127,8 +127,6 @@
       <access origin="https://accounts.google.com/*" />
     </config-file>
 
-    <preference name="WEB_APPLICATION_CLIENT_ID" />
-
     <!-- after_prepare hook to populate APP_ID -->
     <hook type="after_prepare" src="hooks/browser/after_prepare.js" />
   </platform>
